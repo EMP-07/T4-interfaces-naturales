@@ -1,121 +1,176 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 
-void main() {
-  runApp(const MyApp());
-}
+import 'comandos.dart';
+import 'tema.dart';
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+void main() => runApp(const ListaVozApp());
 
-  // This widget is the root of your application.
+class ListaVozApp extends StatelessWidget {
+  const ListaVozApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'Lista por voz',
+      debugShowCheckedModeBanner: false,
+      theme: temaMorado(),
+      home: const PantallaLista(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class PantallaLista extends StatefulWidget {
+  const PantallaLista({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<PantallaLista> createState() => _PantallaListaState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _PantallaListaState extends State<PantallaLista> {
+  // --- 3.1: las dos herramientas de voz ---
+  final SpeechToText _voz = SpeechToText(); // para OÍR
+  final FlutterTts _tts = FlutterTts(); // para HABLAR
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  final List<String> _elementos = [];
+
+  bool _vozDisponible = false;
+  bool _escuchando = false;
+  String _transcripcion = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _iniciarVoz();
   }
+
+  /// 3.1: prepara la voz de respuesta y el reconocimiento.
+  Future<void> _iniciarVoz() async {
+    await _tts.setLanguage('es-ES');
+
+    final disponible = await _voz.initialize(
+      onStatus: (estado) {
+        if (estado == 'done' || estado == 'notListening') {
+          if (mounted) setState(() => _escuchando = false);
+        }
+      },
+      onError: (error) {
+        if (mounted) setState(() => _escuchando = false);
+      },
+    );
+
+    if (!mounted) return;
+    setState(() => _vozDisponible = disponible);
+  }
+
+  /// 3.2: al pulsar el micrófono, escucha como máximo 5 segundos.
+  Future<void> _pulsarMicrofono() async {
+    if (_escuchando) {
+      await _voz.stop();
+      setState(() => _escuchando = false);
+      return;
+    }
+    await _tts.stop(); // que la app no se oiga a sí misma
+    setState(() {
+      _escuchando = true;
+      _transcripcion = '';
+    });
+    await _voz.listen(
+      onResult: _alReconocer,
+      localeId: 'es_ES',
+      listenFor: const Duration(seconds: 5),
+    );
+  }
+
+  /// 3.3: muestra lo que se va oyendo y, al terminar, ejecuta la orden.
+  void _alReconocer(SpeechRecognitionResult resultado) {
+    setState(() => _transcripcion = resultado.recognizedWords);
+    if (resultado.finalResult) {
+      setState(() => _escuchando = false);
+      _ejecutar(interpretarComando(resultado.recognizedWords));
+    }
+  }
+
+  void _ejecutar(Comando comando) {
+    switch (comando) {
+      case Comando.anadir:
+        _anadir();
+      case Comando.borrar:
+        _borrar();
+      case Comando.leer:
+        _leer();
+      case Comando.ayuda:
+        _ayuda();
+      case Comando.desconocido:
+        break; // lo resolvemos en el paso 4
+    }
+  }
+
+  // --- 3.4: acciones con respuesta hablada ---
+
+  void _anadir() {
+    final numero = _elementos.length + 1;
+    setState(() => _elementos.add('Elemento $numero'));
+    _tts.speak('Añadido el elemento $numero');
+  }
+
+  void _borrar() {
+    if (_elementos.isEmpty) {
+      _tts.speak('La lista está vacía');
+      return;
+    }
+    final numero = _elementos.length;
+    setState(() => _elementos.removeLast());
+    _tts.speak('Borrado el elemento $numero');
+  }
+
+  void _leer() {
+    final n = _elementos.length;
+    _tts.speak(n == 1 ? 'Hay 1 elemento' : 'Hay $n elementos');
+  }
+
+  void _ayuda() {
+    _tts.speak('Puedes decir: añadir, borrar, leer o ayuda');
+  }
+
+  // --- Pantalla (sencilla; la mejoramos en el paso 4) ---
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Lista por voz'),
+        backgroundColor: Paleta.c700,
+        foregroundColor: Colors.white,
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _elementos.length,
+              itemBuilder: (context, i) => Card(
+                color: Colors.white,
+                child: ListTile(title: Text(_elementos[i])),
+              ),
             ),
-          ],
-        ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Has dicho: ${_transcripcion.isEmpty ? '—' : _transcripcion}',
+              style: const TextStyle(color: Paleta.c900, fontSize: 16),
+            ),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+        onPressed: _vozDisponible ? _pulsarMicrofono : null,
+        backgroundColor: Paleta.c600,
+        foregroundColor: Colors.white,
+        child: const Icon(Icons.mic),
       ),
     );
   }
