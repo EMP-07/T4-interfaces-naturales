@@ -1,122 +1,226 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
-void main() {
-  runApp(const MyApp());
-}
+import 'detector_agitado.dart';
+import 'tema.dart';
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+void main() => runApp(const NotasGestosApp());
 
-  // This widget is the root of your application.
+class NotasGestosApp extends StatelessWidget {
+  const NotasGestosApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'Notas',
+      debugShowCheckedModeBanner: false,
+      theme: temaMorado(),
+      home: const PantallaNotas(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
+/// Una nota con un id único (lo necesita Dismissible como clave).
+class Nota {
+  Nota(this.id, this.texto);
+  final int id;
+  final String texto;
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class PantallaNotas extends StatefulWidget {
+  const PantallaNotas({super.key});
 
-  void _incrementCounter() {
+  @override
+  State<PantallaNotas> createState() => _PantallaNotasState();
+}
+
+class _PantallaNotasState extends State<PantallaNotas> {
+  final List<Nota> _notas = [];
+  final TextEditingController _campo = TextEditingController();
+  final DetectorAgitado _detector = DetectorAgitado();
+  StreamSubscription<UserAccelerometerEvent>? _suscripcion;
+
+  int _siguienteId = 0;
+
+  // Última nota borrada y su posición (para deshacer).
+  Nota? _notaBorrada;
+  int? _posicionBorrada;
+
+  @override
+  void initState() {
+    super.initState();
+    // Empezamos a escuchar el sensor cuando la pantalla ya está dibujada.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _escucharSensor());
+  }
+
+  // ------------------------------ Notas ------------------------------
+
+  void _anadirNota() {
+    final texto = _campo.text.trim();
+    if (texto.isEmpty) return;
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _notas.add(Nota(_siguienteId++, texto));
+      _campo.clear();
     });
   }
 
+  /// 3.2: borra, guarda la nota y su posición, y ofrece «Deshacer».
+  void _borrarNota(int posicion) {
+    final nota = _notas[posicion];
+    setState(() {
+      _notas.removeAt(posicion);
+      _notaBorrada = nota;
+      _posicionBorrada = posicion;
+    });
+    _mostrarAviso(SnackBar(
+      content: const Text('Nota borrada'),
+      action: SnackBarAction(label: 'Deshacer', onPressed: _deshacer),
+    ));
+  }
+
+  /// Vuelve a poner la última nota borrada en su sitio.
+  void _deshacer() {
+    final nota = _notaBorrada;
+    if (nota == null) return;
+    setState(() {
+      // Si la lista ha cambiado y la posición ya no existe, va al final.
+      var posicion = _posicionBorrada ?? _notas.length;
+      if (posicion > _notas.length) posicion = _notas.length;
+      _notas.insert(posicion, nota);
+      _notaBorrada = null;
+      _posicionBorrada = null;
+    });
+  }
+
+  /// 3.3 y 3.4: al agitar se recupera la nota; si no hay, no hace nada.
+  void _alAgitar() {
+    if (_notaBorrada == null) return;
+    _deshacer();
+    _mostrarAviso(const SnackBar(content: Text('Nota recuperada al agitar')));
+  }
+
+  void _mostrarAviso(SnackBar aviso) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(aviso);
+  }
+
+  // ------------------------------ Sensor ------------------------------
+
+  /// 3.3: escucha el acelerómetro sin gravedad.
+  void _escucharSensor() {
+    _suscripcion = userAccelerometerEventStream(
+      samplingPeriod: SensorInterval.gameInterval,
+    ).listen((e) {
+      if (_detector.procesar(e.x, e.y, e.z, DateTime.now())) _alAgitar();
+    });
+  }
+
+  // ------------------------------ Interfaz ------------------------------
+
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Notas'),
+        backgroundColor: Paleta.c700,
+        foregroundColor: Colors.white,
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      body: Column(
+        children: [
+          // Campo para añadir notas
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _campo,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _anadirNota(),
+                    decoration: InputDecoration(
+                      hintText: 'Escribe una nota',
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Paleta.c300),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Paleta.c600, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  tooltip: 'Añadir nota',
+                  onPressed: _anadirNota,
+                  style: IconButton.styleFrom(
+                    backgroundColor: Paleta.c600,
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.add),
+                ),
+              ],
             ),
-          ],
+          ),
+          Expanded(child: _lista()),
+        ],
+      ),
+    );
+  }
+
+  Widget _lista() {
+    if (_notas.isEmpty) {
+      return const Center(
+        child: Text(
+          'No hay notas',
+          style: TextStyle(color: Paleta.c700, fontSize: 16),
         ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      itemCount: _notas.length,
+      itemBuilder: (context, i) {
+        final nota = _notas[i];
+        // 3.1: borrar deslizando (Dismissible) o con el botón.
+        return Dismissible(
+          key: ValueKey(nota.id),
+          background: _fondoBorrar(Alignment.centerLeft),
+          secondaryBackground: _fondoBorrar(Alignment.centerRight),
+          onDismissed: (_) => _borrarNota(i),
+          child: Card(
+            color: Colors.white,
+            child: ListTile(
+              title: Text(nota.texto),
+              trailing: IconButton(
+                tooltip: 'Borrar nota',
+                color: Paleta.c600,
+                icon: const Icon(Icons.delete_outline),
+                onPressed: () => _borrarNota(i),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _fondoBorrar(Alignment alineacion) {
+    return Container(
+      alignment: alineacion,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: Paleta.c200,
+        borderRadius: BorderRadius.circular(12),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ),
+      child: const Icon(Icons.delete, color: Paleta.c800),
     );
   }
 }
